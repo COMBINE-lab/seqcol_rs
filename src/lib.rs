@@ -14,11 +14,18 @@ struct SeqCol {
 
 #[allow(dead_code)]
 #[derive(Debug)]
+/// The configuration describing how a digest should
+/// be computed.
 enum DigestConfig {
+    /// Compute the digest using only the required fields
+    /// of "lengths", "names" and "sequences" (if present)
     RequiredOnly,
+    /// Compute the digest additionally including the
+    /// sorted list of (sequence name, length) pair digests
     WithSeqnameLenPairs,
 }
 
+/// The default configuration uses only the required fields
 impl Default for DigestConfig {
     fn default() -> Self {
         Self::RequiredOnly
