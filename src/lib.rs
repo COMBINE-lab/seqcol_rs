@@ -1,3 +1,6 @@
+use sha2::{Sha512, Digest};
+use base64::{Engine as _, engine::{self, general_purpose}, prelude::BASE64_URL_SAFE};
+
 #[derive(Debug)]
 struct SeqCol {
     lengths: Vec<usize>,
@@ -23,6 +26,14 @@ impl SeqCol {
             sequences: vec![]
         }
     }
+}
+
+pub fn sha512t24u_digest(attr: &[u8], offset: usize) -> Vec<u8> {
+    let mut sd = Sha512::new();
+    sd.update(attr);
+    let digest = sd.finalize();
+    let tdigest_b64us = &BASE64_URL_SAFE.encode(&digest[offset..]);
+    general_purpose::STANDARD.decode(tdigest_b64us).unwrap()
 }
 
 
