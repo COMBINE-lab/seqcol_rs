@@ -1,4 +1,7 @@
+use anyhow::Context;
+use needletail::Sequence;
 use serde_json::json;
+use std::path::Path;
 
 pub mod utils;
 
@@ -7,6 +10,18 @@ struct SeqCol {
     lengths: Vec<usize>,
     names: Vec<String>,
     sequences: Option<Vec<String>>,
+}
+
+#[derive(Debug)]
+enum DigestConfig {
+    RequiredOnly,
+    WithSeqnameLenPairs,
+}
+
+impl Default for DigestConfig {
+    fn default() -> Self {
+        Self::RequiredOnly
+    }
 }
 
 #[allow(dead_code)]
@@ -31,9 +46,31 @@ impl SeqCol {
         }
     }
 
-    pub fn digest(&self) -> anyhow::Result<String> {
+    pub fn from_fasta_file<P: AsRef<Path>>(fp: P) -> anyhow::Result<Self> {
+        let mut reader = needletail::parse_fastx_file(&fp).with_context(|| {
+            format!("cannot parse FASTA records from {}", &fp.as_ref().display())
+        })?;
+        let mut names = vec![];
+        let mut lengths = vec![];
+        let mut seqs = vec![];
+        while let Some(record) = reader.next() {
+            let seqrec = record?;
+            let h = utils::sha512t24u_digest(seqrec.normalize(false).as_ref(), 24);
+            seqs.push(format!("SQ.{h}"));
+            names.push(std::str::from_utf8(seqrec.id())?.to_owned());
+            lengths.push(seqrec.num_bases());
+        }
+
+        Ok(Self {
+            lengths,
+            names,
+            sequences: Some(seqs),
+        })
+    }
+
+    pub fn digest(&self, c: DigestConfig) -> anyhow::Result<String> {
         let empty = Vec::<String>::new();
-        let sq_json = json!({
+        let mut sq_json = json!({
             "lengths" : self.lengths,
             "names" : self.names,
             "sequences" : match &self.sequences {
@@ -41,6 +78,27 @@ impl SeqCol {
                 None => &empty
             }
         });
+
+        let mut snlp_digests = vec![];
+        match c {
+            DigestConfig::WithSeqnameLenPairs => {
+                snlp_digests.reserve_exact(self.names.len());
+
+                for (l, n) in self.lengths.iter().zip(self.names.iter()) {
+                    let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
+                    snlp_digests.push(utils::sha512t24u_digest(cr.as_bytes(), 24));
+                }
+                snlp_digests.sort_unstable();
+
+                sq_json["sorted_name_length_pairs"] = serde_json::Value::Array(
+                    snlp_digests
+                        .into_iter()
+                        .map(|x| serde_json::Value::String(x))
+                        .collect(),
+                );
+            }
+            _ => {}
+        }
 
         let mut digest_json = json!({});
         for (k, v) in sq_json.as_object().unwrap().iter() {
@@ -76,8 +134,22 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.as_slice(), v.length().into())),
         );
-        let r = s.digest().unwrap();
+        let r = s.digest(DigestConfig::default()).unwrap();
 
         assert_eq!(r, "6_Sn0CtEZ-LIJDPyhIwYQFBEFnAxDE2j");
+    }
+
+    #[test]
+    fn from_fasta_file_works_with_default() {
+        let s = SeqCol::from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
+        let r = s.digest(DigestConfig::default()).unwrap();
+        assert_eq!(r, "bljJwnQDMNMythX5fNGPeJxyjKIci-B5");
+    }
+
+    #[test]
+    fn from_fasta_file_works_with_seqname_length_pairs() {
+        let s = SeqCol::from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
+        let r = s.digest(DigestConfig::WithSeqnameLenPairs).unwrap();
+        assert_eq!(r, "j7IRM1Tagfq3gQ_94mybcZeAcTz5oy4k");
     }
 }
