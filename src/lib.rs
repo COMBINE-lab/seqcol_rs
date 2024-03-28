@@ -12,6 +12,7 @@ struct SeqCol {
     sequences: Option<Vec<String>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum DigestConfig {
     RequiredOnly,
@@ -69,15 +70,18 @@ impl SeqCol {
     }
 
     pub fn digest(&self, c: DigestConfig) -> anyhow::Result<String> {
-        let empty = Vec::<String>::new();
         let mut sq_json = json!({
             "lengths" : self.lengths,
             "names" : self.names,
-            "sequences" : match &self.sequences {
-                Some(v) => v,
-                None => &empty
-            }
         });
+
+        if let Some(v) = &self.sequences {
+            sq_json["sequences"] = serde_json::Value::Array(
+                v.iter()
+                    .map(|x| serde_json::Value::String(x.to_string()))
+                    .collect(),
+            );
+        };
 
         let mut snlp_digests = vec![];
         match c {
@@ -136,7 +140,7 @@ mod tests {
         );
         let r = s.digest(DigestConfig::default()).unwrap();
 
-        assert_eq!(r, "6_Sn0CtEZ-LIJDPyhIwYQFBEFnAxDE2j");
+        assert_eq!(r, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK"); //6_Sn0CtEZ-LIJDPyhIwYQFBEFnAxDE2j");
     }
 
     #[test]
