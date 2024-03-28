@@ -1,7 +1,6 @@
 use sha2::{Sha512, Digest};
-use base64::{Engine as _, engine::{self, general_purpose}, prelude::BASE64_URL_SAFE};
+use base64::{Engine as _, prelude::BASE64_URL_SAFE};
 use itertools::Itertools;
-use std::iter;
 use serde_json::json;
 
 #[derive(Debug)]
@@ -28,6 +27,24 @@ impl SeqCol {
             names,
             sequences: vec![]
         }
+    }
+
+    pub fn digest(&self) -> anyhow::Result<String> {
+        let sq_json = json!({
+            "lengths" : self.lengths,
+            "names" : self.names,
+            "sequences" : self.sequences
+        });
+
+        let mut digest_json = json!({});
+        for (k, v) in sq_json.as_object().unwrap().iter() {
+            let v2 = canonical_rep(v)?;
+            let h2 = sha512t24u_digest(v2.as_bytes(), 24);
+            digest_json[k] = serde_json::Value::String(h2);
+        }
+        let digest_str = canonical_rep(&digest_json)?;
+        Ok(sha512t24u_digest(digest_str.as_bytes(), 24))
+
     }
 }
 
@@ -106,6 +123,8 @@ mod tests {
         let h4 = sha512t24u_digest(&v.as_bytes(), 24);
         println!("{h4}");
 
+        let r = s.digest().unwrap();
+        println!("digest = {r}");
     }
 
 
