@@ -33,6 +33,21 @@ impl Default for DigestConfig {
     }
 }
 
+/*
+struct DigestFunction {
+    digest: fn(&[u8]) -> String
+}
+
+impl Default for DigestFunction {
+    fn default() -> Self {
+        let df = |x| utils::sha512t24u_digest(x, constants::DEFAULT_DIGEST_BYTES);
+        Self {
+            digest : df
+        }
+    }
+}
+*/
+
 #[allow(dead_code)]
 impl SeqCol {
     /// Takes an iterator `it` over pairs of sequence names and lengths, and populates
@@ -55,7 +70,7 @@ impl SeqCol {
         }
     }
 
-    pub fn from_seqcol(sc: &serde_json::Value) -> anyhow::Result<Self> {
+    pub fn try_from_seqcol(sc: &serde_json::Value) -> anyhow::Result<Self> {
         // The  input seqcol object must be of type `Object`
         if let Some(seqcol) = sc.as_object() {
             // we *must* have a lengths field
@@ -99,7 +114,7 @@ impl SeqCol {
         }
     }
 
-    pub fn from_fasta_file<P: AsRef<Path>>(fp: P) -> anyhow::Result<Self> {
+    pub fn try_from_fasta_file<P: AsRef<Path>>(fp: P) -> anyhow::Result<Self> {
         let mut reader = needletail::parse_fastx_file(&fp).with_context(|| {
             format!("cannot parse FASTA records from {}", &fp.as_ref().display())
         })?;
@@ -208,21 +223,21 @@ mod tests {
         let file = File::open("test_data/seqcol_obj.json").expect("can't open input seqcol file");
         let reader = BufReader::new(file);
         let sc = serde_json::from_reader(reader).unwrap();
-        let s = SeqCol::from_seqcol(&sc).unwrap();
+        let s = SeqCol::try_from_seqcol(&sc).unwrap();
         let r = s.digest(DigestConfig::default()).unwrap();
         assert_eq!(r, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
     }
 
     #[test]
     fn from_fasta_file_works_with_default() {
-        let s = SeqCol::from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
+        let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s.digest(DigestConfig::default()).unwrap();
         assert_eq!(r, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
     }
 
     #[test]
     fn from_fasta_file_works_with_seqname_length_pairs() {
-        let s = SeqCol::from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
+        let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s.digest(DigestConfig::WithSeqnameLenPairs).unwrap();
         assert_eq!(r, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
     }
