@@ -13,6 +13,11 @@ pub struct SeqCol {
     sequences: Option<Vec<String>>,
 }
 
+pub enum DigestKeyType {
+    Required(String),
+    Optional(String),
+}
+
 #[allow(dead_code)]
 #[derive(Debug)]
 /// The configuration describing how a digest should
@@ -33,20 +38,24 @@ impl Default for DigestConfig {
     }
 }
 
-/*
-struct DigestFunction {
-    digest: fn(&[u8]) -> String
+pub struct DigestFunction {
+    digest: fn(&[u8]) -> String,
+}
+
+impl DigestFunction {
+    #[inline(always)]
+    pub fn compute(&self, x: &[u8]) -> String {
+        (self.digest)(x)
+    }
 }
 
 impl Default for DigestFunction {
     fn default() -> Self {
-        let df = |x| utils::sha512t24u_digest(x, constants::DEFAULT_DIGEST_BYTES);
         Self {
-            digest : df
+            digest: utils::sha512t24u_digest_default,
         }
     }
 }
-*/
 
 #[allow(dead_code)]
 impl SeqCol {
@@ -123,10 +132,7 @@ impl SeqCol {
         let mut seqs = vec![];
         while let Some(record) = reader.next() {
             let seqrec = record?;
-            let h = utils::sha512t24u_digest(
-                seqrec.normalize(false).as_ref(),
-                constants::DEFAULT_DIGEST_BYTES,
-            );
+            let h = utils::sha512t24u_digest_default(seqrec.normalize(false).as_ref());
             seqs.push(format!("SQ.{h}"));
             names.push(std::str::from_utf8(seqrec.id())?.to_owned());
             lengths.push(seqrec.num_bases());
@@ -159,10 +165,7 @@ impl SeqCol {
 
             for (l, n) in self.lengths.iter().zip(self.names.iter()) {
                 let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
-                snlp_digests.push(utils::sha512t24u_digest(
-                    cr.as_bytes(),
-                    constants::DEFAULT_DIGEST_BYTES,
-                ));
+                snlp_digests.push(utils::sha512t24u_digest_default(cr.as_bytes()));
             }
             snlp_digests.sort_unstable();
 
@@ -177,14 +180,11 @@ impl SeqCol {
         let mut digest_json = json!({});
         for (k, v) in sq_json.as_object().unwrap().iter() {
             let v2 = utils::canonical_rep(v)?;
-            let h2 = utils::sha512t24u_digest(v2.as_bytes(), constants::DEFAULT_DIGEST_BYTES);
+            let h2 = utils::sha512t24u_digest_default(v2.as_bytes());
             digest_json[k] = serde_json::Value::String(h2);
         }
         let digest_str = utils::canonical_rep(&digest_json)?;
-        Ok(utils::sha512t24u_digest(
-            digest_str.as_bytes(),
-            constants::DEFAULT_DIGEST_BYTES,
-        ))
+        Ok(utils::sha512t24u_digest_default(digest_str.as_bytes()))
     }
 }
 
