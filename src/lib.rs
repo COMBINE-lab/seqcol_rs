@@ -54,6 +54,46 @@ impl SeqCol {
         }
     }
 
+    pub fn from_seqcol(sc: &serde_json::Value) -> anyhow::Result<Self> {
+        if let Some(seqcol) = sc.as_object() {
+            let lengths = seqcol
+                .get("lengths")
+                .ok_or(anyhow::anyhow!("must contain lengths field"))?;
+            let lengths = lengths
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as usize)
+                .collect();
+
+            let names = seqcol
+                .get("names")
+                .ok_or(anyhow::anyhow!("must contain names field"))?;
+            let names = names
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_str().unwrap().to_owned())
+                .collect();
+
+            let sequences = seqcol.get("sequences").map(|seqs| {
+                seqs.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_str().unwrap().to_owned())
+                    .collect()
+            });
+
+            Ok(Self {
+                lengths,
+                names,
+                sequences,
+            })
+        } else {
+            anyhow::bail!("seqcol object must be a valid JSON Object");
+        }
+    }
+
     pub fn from_fasta_file<P: AsRef<Path>>(fp: P) -> anyhow::Result<Self> {
         let mut reader = needletail::parse_fastx_file(&fp).with_context(|| {
             format!("cannot parse FASTA records from {}", &fp.as_ref().display())
@@ -91,24 +131,21 @@ impl SeqCol {
         };
 
         let mut snlp_digests = vec![];
-        match c {
-            DigestConfig::WithSeqnameLenPairs => {
-                snlp_digests.reserve_exact(self.names.len());
+        if let DigestConfig::WithSeqnameLenPairs = c {
+            snlp_digests.reserve_exact(self.names.len());
 
-                for (l, n) in self.lengths.iter().zip(self.names.iter()) {
-                    let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
-                    snlp_digests.push(utils::sha512t24u_digest(cr.as_bytes(), 24));
-                }
-                snlp_digests.sort_unstable();
-
-                sq_json["sorted_name_length_pairs"] = serde_json::Value::Array(
-                    snlp_digests
-                        .into_iter()
-                        .map(|x| serde_json::Value::String(x))
-                        .collect(),
-                );
+            for (l, n) in self.lengths.iter().zip(self.names.iter()) {
+                let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
+                snlp_digests.push(utils::sha512t24u_digest(cr.as_bytes(), 24));
             }
-            _ => {}
+            snlp_digests.sort_unstable();
+
+            sq_json["sorted_name_length_pairs"] = serde_json::Value::Array(
+                snlp_digests
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            );
         }
 
         let mut digest_json = json!({});
@@ -126,6 +163,8 @@ impl SeqCol {
 mod tests {
     use super::*;
     use noodles_sam;
+    use std::fs::File;
+    use std::io::BufReader;
 
     #[test]
     fn from_sam_header_works() {
@@ -147,7 +186,17 @@ mod tests {
         );
         let r = s.digest(DigestConfig::default()).unwrap();
 
-        assert_eq!(r, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK"); //6_Sn0CtEZ-LIJDPyhIwYQFBEFnAxDE2j");
+        assert_eq!(r, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
+    }
+
+    #[test]
+    fn from_seqcol_object() {
+        let file = File::open("test_data/seqcol_obj.json").expect("can't open input seqcol file");
+        let reader = BufReader::new(file);
+        let sc = serde_json::from_reader(reader).unwrap();
+        let s = SeqCol::from_seqcol(&sc).unwrap();
+        let r = s.digest(DigestConfig::default()).unwrap();
+        assert_eq!(r, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
     }
 
     #[test]
