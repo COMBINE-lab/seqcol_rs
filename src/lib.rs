@@ -7,7 +7,7 @@ pub mod constants;
 pub mod utils;
 
 #[derive(Debug)]
-struct SeqCol {
+pub struct SeqCol {
     lengths: Vec<usize>,
     names: Vec<String>,
     sequences: Option<Vec<String>>,
@@ -17,7 +17,7 @@ struct SeqCol {
 #[derive(Debug)]
 /// The configuration describing how a digest should
 /// be computed.
-enum DigestConfig {
+pub enum DigestConfig {
     /// Compute the digest using only the required fields
     /// of "lengths", "names" and "sequences" (if present)
     RequiredOnly,
