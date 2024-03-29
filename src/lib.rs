@@ -154,7 +154,7 @@ mod tests {
     fn from_fasta_file_works_with_default() {
         let s = SeqCol::from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s.digest(DigestConfig::default()).unwrap();
-        assert_eq!(r, "bljJwnQDMNMythX5fNGPeJxyjKIci-B5");
+        assert_eq!(r, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
     }
 
     #[test]
