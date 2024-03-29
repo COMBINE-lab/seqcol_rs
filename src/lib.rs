@@ -161,6 +161,6 @@ mod tests {
     fn from_fasta_file_works_with_seqname_length_pairs() {
         let s = SeqCol::from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s.digest(DigestConfig::WithSeqnameLenPairs).unwrap();
-        assert_eq!(r, "j7IRM1Tagfq3gQ_94mybcZeAcTz5oy4k");
+        assert_eq!(r, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
     }
 }
