@@ -13,6 +13,7 @@ pub struct SeqCol {
     sequences: Option<Vec<String>>,
 }
 
+#[allow(dead_code)]
 pub enum DigestKeyType {
     Required(String),
     Optional(String),
@@ -79,13 +80,17 @@ impl SeqCol {
         }
     }
 
+    /// Tries to construct a [SeqCol] object from an input seq_col structure
+    /// represented as a [serde_json::Value] (i.e. deserialized from a JSON file).
+    /// This returns an [Ok]`(`[SeqCol]``)` if successful, or an error if the
+    /// object couldn't be constructed (e.g. required fields were missing, etc.).
     pub fn try_from_seqcol(sc: &serde_json::Value) -> anyhow::Result<Self> {
         // The  input seqcol object must be of type `Object`
         if let Some(seqcol) = sc.as_object() {
             // we *must* have a lengths field
             let lengths = seqcol
                 .get("lengths")
-                .ok_or(anyhow::anyhow!("must contain lengths field"))?;
+                .ok_or(anyhow::anyhow!("must contain a \"lengths\" field"))?;
             let lengths = lengths
                 .as_array()
                 .unwrap()
@@ -96,7 +101,7 @@ impl SeqCol {
             // we *must* have a names field
             let names = seqcol
                 .get("names")
-                .ok_or(anyhow::anyhow!("must contain names field"))?;
+                .ok_or(anyhow::anyhow!("must contain a \"names\" field"))?;
             let names = names
                 .as_array()
                 .unwrap()
@@ -123,16 +128,23 @@ impl SeqCol {
         }
     }
 
+    /// Try to construct a [SeqCol] object from an input FASTA file (represented
+    /// by it's [AsRef<Path>] `fp`).
+    /// Returns [Ok]`(`[SeqCol]`)` on success or otherwise an error describing
+    /// why the [SeqCol] object could not be constructed.
     pub fn try_from_fasta_file<P: AsRef<Path>>(fp: P) -> anyhow::Result<Self> {
         let mut reader = needletail::parse_fastx_file(&fp).with_context(|| {
             format!("cannot parse FASTA records from {}", &fp.as_ref().display())
         })?;
+
+        let digest_function = DigestFunction::default();
+
         let mut names = vec![];
         let mut lengths = vec![];
         let mut seqs = vec![];
         while let Some(record) = reader.next() {
             let seqrec = record?;
-            let h = utils::sha512t24u_digest_default(seqrec.normalize(false).as_ref());
+            let h = digest_function.compute(seqrec.normalize(false).as_ref());
             seqs.push(format!("SQ.{h}"));
             names.push(std::str::from_utf8(seqrec.id())?.to_owned());
             lengths.push(seqrec.num_bases());
@@ -145,6 +157,11 @@ impl SeqCol {
         })
     }
 
+    /// Computes and returns the [SeqCol] digest of the current [SeqCol] object.
+    /// The [DigestConfig] parameter `c` controls what fields are used to compute the digest.
+    ///
+    /// Returns [Ok]`(`[String]`)` on success, representing the computed digest
+    /// or otherwise an error describing why the digest could not be computed.
     pub fn digest(&self, c: DigestConfig) -> anyhow::Result<String> {
         let mut sq_json = json!({
             "lengths" : self.lengths,
@@ -159,13 +176,15 @@ impl SeqCol {
             );
         };
 
+        let digest_function = DigestFunction::default();
+
         let mut snlp_digests = vec![];
         if let DigestConfig::WithSeqnameLenPairs = c {
             snlp_digests.reserve_exact(self.names.len());
 
             for (l, n) in self.lengths.iter().zip(self.names.iter()) {
                 let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
-                snlp_digests.push(utils::sha512t24u_digest_default(cr.as_bytes()));
+                snlp_digests.push(digest_function.compute(cr.as_bytes()));
             }
             snlp_digests.sort_unstable();
 
@@ -180,11 +199,11 @@ impl SeqCol {
         let mut digest_json = json!({});
         for (k, v) in sq_json.as_object().unwrap().iter() {
             let v2 = utils::canonical_rep(v)?;
-            let h2 = utils::sha512t24u_digest_default(v2.as_bytes());
+            let h2 = digest_function.compute(v2.as_bytes());
             digest_json[k] = serde_json::Value::String(h2);
         }
         let digest_str = utils::canonical_rep(&digest_json)?;
-        Ok(utils::sha512t24u_digest_default(digest_str.as_bytes()))
+        Ok(digest_function.compute(digest_str.as_bytes()))
     }
 }
 
