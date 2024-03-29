@@ -3,6 +3,7 @@ use needletail::Sequence;
 use serde_json::json;
 use std::path::Path;
 
+pub mod constants;
 pub mod utils;
 
 #[derive(Debug)]
@@ -55,7 +56,9 @@ impl SeqCol {
     }
 
     pub fn from_seqcol(sc: &serde_json::Value) -> anyhow::Result<Self> {
+        // The  input seqcol object must be of type `Object`
         if let Some(seqcol) = sc.as_object() {
+            // we *must* have a lengths field
             let lengths = seqcol
                 .get("lengths")
                 .ok_or(anyhow::anyhow!("must contain lengths field"))?;
@@ -66,6 +69,7 @@ impl SeqCol {
                 .map(|x| x.as_u64().unwrap() as usize)
                 .collect();
 
+            // we *must* have a names field
             let names = seqcol
                 .get("names")
                 .ok_or(anyhow::anyhow!("must contain names field"))?;
@@ -76,6 +80,7 @@ impl SeqCol {
                 .map(|x| x.as_str().unwrap().to_owned())
                 .collect();
 
+            // we *may* have a sequences field
             let sequences = seqcol.get("sequences").map(|seqs| {
                 seqs.as_array()
                     .unwrap()
@@ -103,7 +108,10 @@ impl SeqCol {
         let mut seqs = vec![];
         while let Some(record) = reader.next() {
             let seqrec = record?;
-            let h = utils::sha512t24u_digest(seqrec.normalize(false).as_ref(), 24);
+            let h = utils::sha512t24u_digest(
+                seqrec.normalize(false).as_ref(),
+                constants::DEFAULT_DIGEST_BYTES,
+            );
             seqs.push(format!("SQ.{h}"));
             names.push(std::str::from_utf8(seqrec.id())?.to_owned());
             lengths.push(seqrec.num_bases());
@@ -136,7 +144,10 @@ impl SeqCol {
 
             for (l, n) in self.lengths.iter().zip(self.names.iter()) {
                 let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
-                snlp_digests.push(utils::sha512t24u_digest(cr.as_bytes(), 24));
+                snlp_digests.push(utils::sha512t24u_digest(
+                    cr.as_bytes(),
+                    constants::DEFAULT_DIGEST_BYTES,
+                ));
             }
             snlp_digests.sort_unstable();
 
@@ -151,11 +162,14 @@ impl SeqCol {
         let mut digest_json = json!({});
         for (k, v) in sq_json.as_object().unwrap().iter() {
             let v2 = utils::canonical_rep(v)?;
-            let h2 = utils::sha512t24u_digest(v2.as_bytes(), 24);
+            let h2 = utils::sha512t24u_digest(v2.as_bytes(), constants::DEFAULT_DIGEST_BYTES);
             digest_json[k] = serde_json::Value::String(h2);
         }
         let digest_str = utils::canonical_rep(&digest_json)?;
-        Ok(utils::sha512t24u_digest(digest_str.as_bytes(), 24))
+        Ok(utils::sha512t24u_digest(
+            digest_str.as_bytes(),
+            constants::DEFAULT_DIGEST_BYTES,
+        ))
     }
 }
 
