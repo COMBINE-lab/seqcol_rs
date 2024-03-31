@@ -20,7 +20,7 @@ pub enum DigestKeyType {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 /// The configuration describing how a digest should
 /// be computed.
 pub enum DigestConfig {
@@ -163,6 +163,21 @@ impl SeqCol {
     /// Returns [Ok]`(`[String]`)` on success, representing the computed digest
     /// or otherwise an error describing why the digest could not be computed.
     pub fn digest(&self, c: DigestConfig) -> anyhow::Result<String> {
+        let sq_json = self.seqcol_obj(c)?;
+
+        let digest_function = DigestFunction::default();
+
+        let mut digest_json = json!({});
+        for (k, v) in sq_json.as_object().unwrap().iter() {
+            let v2 = utils::canonical_rep(v)?;
+            let h2 = digest_function.compute(v2.as_bytes());
+            digest_json[k] = serde_json::Value::String(h2);
+        }
+        let digest_str = utils::canonical_rep(&digest_json)?;
+        Ok(digest_function.compute(digest_str.as_bytes()))
+    }
+
+    pub fn seqcol_obj(&self, c: DigestConfig) -> anyhow::Result<serde_json::Value> {
         let mut sq_json = json!({
             "lengths" : self.lengths,
             "names" : self.names,
@@ -195,15 +210,7 @@ impl SeqCol {
                     .collect(),
             );
         }
-
-        let mut digest_json = json!({});
-        for (k, v) in sq_json.as_object().unwrap().iter() {
-            let v2 = utils::canonical_rep(v)?;
-            let h2 = digest_function.compute(v2.as_bytes());
-            digest_json[k] = serde_json::Value::String(h2);
-        }
-        let digest_str = utils::canonical_rep(&digest_json)?;
-        Ok(digest_function.compute(digest_str.as_bytes()))
+        Ok(sq_json)
     }
 }
 
