@@ -1,6 +1,8 @@
 use anyhow::Context;
 use needletail::Sequence;
 use serde_json::json;
+use sha2::Digest as ShaDigest;
+use sha2::Sha256;
 use std::path::Path;
 
 pub mod constants;
@@ -11,6 +13,41 @@ pub struct SeqCol {
     lengths: Vec<usize>,
     names: Vec<String>,
     sequences: Option<Vec<String>>,
+    sha256_names: Option<String>,
+    sha256_seqs: Option<String>,
+}
+
+/// Represents the computed result of a digest.
+/// This will always have a valid `sq_digest` and
+/// may have sha256 digests for the names and or sequences.
+#[derive(Debug)]
+pub struct DigestResult {
+    sq_digest: String,
+    sha256_names: Option<String>,
+    sha256_seqs: Option<String>,
+}
+
+impl DigestResult {
+    /// Produce a [serde_json::Value] JSON representation of the
+    /// current [DigestResult].
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut repr = serde_json::map::Map::new();
+        repr.insert(
+            "seqcol_digest".to_owned(),
+            serde_json::Value::String(self.sq_digest.clone()),
+        );
+        if self.sha256_names.is_some() || self.sha256_seqs.is_some() {
+            repr.insert(
+                "sha256_digests".to_owned(),
+                json!({
+                    "sha256_names" : self.sha256_names,
+                    "sha256_seqs" : self.sha256_seqs }),
+            );
+        } else {
+            repr.insert("sha256_digests".to_owned(), serde_json::Value::Null);
+        }
+        serde_json::json!(repr)
+    }
 }
 
 #[allow(dead_code)]
@@ -77,6 +114,8 @@ impl SeqCol {
             lengths,
             names,
             sequences: None,
+            sha256_names: None,
+            sha256_seqs: None,
         }
     }
 
@@ -122,6 +161,8 @@ impl SeqCol {
                 lengths,
                 names,
                 sequences,
+                sha256_names: None,
+                sha256_seqs: None,
             })
         } else {
             anyhow::bail!("seqcol object must be a valid JSON Object");
@@ -138,22 +179,36 @@ impl SeqCol {
         })?;
 
         let digest_function = DigestFunction::default();
+        let mut name_sha_digest = Sha256::new();
+        let mut seq_sha_digest = Sha256::new();
 
         let mut names = vec![];
         let mut lengths = vec![];
         let mut seqs = vec![];
         while let Some(record) = reader.next() {
             let seqrec = record?;
-            let h = digest_function.compute(seqrec.normalize(false).as_ref());
-            seqs.push(format!("SQ.{h}"));
-            names.push(std::str::from_utf8(seqrec.id())?.to_owned());
+            {
+                seq_sha_digest.update(seqrec.normalize(false).as_ref());
+                let h = digest_function.compute(seqrec.normalize(false).as_ref());
+                seqs.push(format!("SQ.{h}"));
+            }
+
+            let seq_name = std::str::from_utf8(seqrec.id())?.to_owned();
+            name_sha_digest.update(seq_name.as_bytes());
+            names.push(seq_name);
+
             lengths.push(seqrec.num_bases());
         }
+
+        let sha256_names = hex::encode(name_sha_digest.finalize());
+        let sha256_seqs = hex::encode(seq_sha_digest.finalize());
 
         Ok(Self {
             lengths,
             names,
             sequences: Some(seqs),
+            sha256_names: Some(sha256_names),
+            sha256_seqs: Some(sha256_seqs),
         })
     }
 
@@ -162,7 +217,7 @@ impl SeqCol {
     ///
     /// Returns [Ok]`(`[String]`)` on success, representing the computed digest
     /// or otherwise an error describing why the digest could not be computed.
-    pub fn digest(&self, c: DigestConfig) -> anyhow::Result<String> {
+    pub fn digest(&self, c: DigestConfig) -> anyhow::Result<DigestResult> {
         let sq_json = self.seqcol_obj(c)?;
 
         let digest_function = DigestFunction::default();
@@ -174,7 +229,11 @@ impl SeqCol {
             digest_json[k] = serde_json::Value::String(h2);
         }
         let digest_str = utils::canonical_rep(&digest_json)?;
-        Ok(digest_function.compute(digest_str.as_bytes()))
+        Ok(DigestResult {
+            sq_digest: digest_function.compute(digest_str.as_bytes()),
+            sha256_names: self.sha256_names.clone(),
+            sha256_seqs: self.sha256_seqs.clone(),
+        })
     }
 
     pub fn seqcol_obj(&self, c: DigestConfig) -> anyhow::Result<serde_json::Value> {
@@ -241,7 +300,7 @@ mod tests {
         );
         let r = s.digest(DigestConfig::default()).unwrap();
 
-        assert_eq!(r, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
+        assert_eq!(r.sq_digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
     }
 
     #[test]
@@ -251,20 +310,28 @@ mod tests {
         let sc = serde_json::from_reader(reader).unwrap();
         let s = SeqCol::try_from_seqcol(&sc).unwrap();
         let r = s.digest(DigestConfig::default()).unwrap();
-        assert_eq!(r, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
+        assert_eq!(r.sq_digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
     }
 
     #[test]
     fn from_fasta_file_works_with_default() {
         let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s.digest(DigestConfig::default()).unwrap();
-        assert_eq!(r, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
+        assert_eq!(r.sq_digest, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
     }
 
     #[test]
     fn from_fasta_file_works_with_seqname_length_pairs() {
         let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s.digest(DigestConfig::WithSeqnameLenPairs).unwrap();
-        assert_eq!(r, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
+        assert_eq!(r.sq_digest, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
+        assert_eq!(
+            r.sha256_names,
+            Some("d3a44a65dac11f07a2aeea6f505e8134dad9e2f9af9c162b83f6df0ce6adbbe5".to_owned())
+        );
+        assert_eq!(
+            r.sha256_seqs,
+            Some("8a4b348914002bcc60c8bb2a938d0eef2bb519bd575ec12536d39208e4d3ea4a".to_owned())
+        );
     }
 }
