@@ -17,12 +17,107 @@ pub struct SeqCol {
     sha256_seqs: Option<String>,
 }
 
+pub trait DigestToJson {
+    fn to_json(&self) -> serde_json::Value;
+}
+
+#[derive(Debug)]
+pub struct Level0Digest {
+    digest: String,
+}
+
+impl DigestToJson for Level0Digest {
+    fn to_json(&self) -> serde_json::Value {
+        let mut repr = serde_json::map::Map::new();
+        let lvl: serde_json::Value = 0_u32.into();
+        repr.insert("level".to_owned(), lvl);
+        repr.insert(
+            "seqcol_digest".to_owned(),
+            serde_json::Value::String(self.digest.clone()),
+        );
+        serde_json::json!(repr)
+    }
+}
+
+#[derive(Debug)]
+pub struct Level1Digest {
+    lengths: String,
+    names: String,
+    sequences: Option<String>,
+}
+
+impl DigestToJson for Level1Digest {
+    fn to_json(&self) -> serde_json::Value {
+        let mut repr = serde_json::map::Map::new();
+        let lvl: serde_json::Value = 1_u32.into();
+        repr.insert("level".to_owned(), lvl);
+        repr.insert(
+            "lengths".to_owned(),
+            serde_json::Value::String(self.lengths.clone()),
+        );
+        repr.insert(
+            "names".to_owned(),
+            serde_json::Value::String(self.names.clone()),
+        );
+        if let Some(seq) = &self.sequences {
+            repr.insert(
+                "sequences".to_owned(),
+                serde_json::Value::String(seq.clone()),
+            );
+        }
+        serde_json::json!(repr)
+    }
+}
+
+#[derive(Debug)]
+pub struct Level2Digest {
+    lengths: Vec<usize>,
+    names: Vec<String>,
+    sequences: Option<Vec<String>>,
+}
+
+impl DigestToJson for Level2Digest {
+    fn to_json(&self) -> serde_json::Value {
+        if self.sequences.is_some() {
+            serde_json::json!({
+                "level" : 2,
+                "lengths" : self.lengths,
+                "names" : self.names,
+                "sequences" : self.sequences.clone().expect("non-empty")
+            })
+        } else {
+            serde_json::json!({
+                "level" : 2,
+                "lengths" : self.lengths,
+                "names" : self.names,
+            })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum DigestLevelResult {
+    Level0(Level0Digest),
+    Level1(Level1Digest),
+    Level2(Level2Digest),
+}
+
+impl DigestToJson for DigestLevelResult {
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Level0(l) => l.to_json(),
+            Self::Level1(l) => l.to_json(),
+            Self::Level2(l) => l.to_json(),
+        }
+    }
+}
+
 /// Represents the computed result of a digest.
 /// This will always have a valid `sq_digest` and
 /// may have sha256 digests for the names and or sequences.
 #[derive(Debug)]
 pub struct DigestResult {
-    sq_digest: String,
+    sq_digest: DigestLevelResult,
     sha256_names: Option<String>,
     sha256_seqs: Option<String>,
 }
@@ -32,10 +127,7 @@ impl DigestResult {
     /// current [DigestResult].
     pub fn to_json(&self) -> serde_json::Value {
         let mut repr = serde_json::map::Map::new();
-        repr.insert(
-            "seqcol_digest".to_owned(),
-            serde_json::Value::String(self.sq_digest.clone()),
-        );
+        repr.insert("seqcol_digest".to_owned(), self.sq_digest.to_json());
         if self.sha256_names.is_some() || self.sha256_seqs.is_some() {
             repr.insert(
                 "sha256_digests".to_owned(),
@@ -56,23 +148,31 @@ pub enum DigestKeyType {
     Optional(String),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum DigestLevel {
+    Level0,
+    Level1,
+    Level2,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 /// The configuration describing how a digest should
 /// be computed.
-pub enum DigestConfig {
-    /// Compute the digest using only the required fields
-    /// of "lengths", "names" and "sequences" (if present)
-    RequiredOnly,
+pub struct DigestConfig {
+    level: DigestLevel,
     /// Compute the digest additionally including the
     /// sorted list of (sequence name, length) pair digests
-    WithSeqnameLenPairs,
+    with_seqname_pairs: bool,
 }
 
 /// The default configuration uses only the required fields
 impl Default for DigestConfig {
     fn default() -> Self {
-        Self::RequiredOnly
+        Self {
+            level: DigestLevel::Level1,
+            with_seqname_pairs: false,
+        }
     }
 }
 
@@ -218,22 +318,61 @@ impl SeqCol {
     /// Returns [Ok]`(`[String]`)` on success, representing the computed digest
     /// or otherwise an error describing why the digest could not be computed.
     pub fn digest(&self, c: DigestConfig) -> anyhow::Result<DigestResult> {
-        let sq_json = self.seqcol_obj(c)?;
-
         let digest_function = DigestFunction::default();
-
-        let mut digest_json = json!({});
-        for (k, v) in sq_json.as_object().unwrap().iter() {
-            let v2 = utils::canonical_rep(v)?;
-            let h2 = digest_function.compute(v2.as_bytes());
-            digest_json[k] = serde_json::Value::String(h2);
+        match c.level {
+            DigestLevel::Level0 => {
+                let sq_json = self.seqcol_obj(c)?;
+                let mut digest_json = json!({});
+                for (k, v) in sq_json.as_object().unwrap().iter() {
+                    let v2 = utils::canonical_rep(v)?;
+                    let h2 = digest_function.compute(v2.as_bytes());
+                    digest_json[k] = serde_json::Value::String(h2);
+                }
+                let digest_str = utils::canonical_rep(&digest_json)?;
+                Ok(DigestResult {
+                    sq_digest: DigestLevelResult::Level0(Level0Digest {
+                        digest: digest_function.compute(digest_str.as_bytes()),
+                    }),
+                    sha256_names: self.sha256_names.clone(),
+                    sha256_seqs: self.sha256_seqs.clone(),
+                })
+            }
+            DigestLevel::Level1 => {
+                let sq_json = self.seqcol_obj(c)?;
+                let mut names = String::new();
+                let mut lengths = String::new();
+                let mut sequences = None;
+                for (k, v) in sq_json.as_object().unwrap().iter() {
+                    let v2 = utils::canonical_rep(v)?;
+                    let h2 = digest_function.compute(v2.as_bytes());
+                    if k == "names" {
+                        names = h2;
+                    } else if k == "lengths" {
+                        lengths = h2;
+                    } else if k == "sequences" {
+                        sequences = Some(h2);
+                    }
+                }
+                Ok(DigestResult {
+                    sq_digest: DigestLevelResult::Level1(Level1Digest {
+                        names,
+                        lengths,
+                        sequences,
+                    }),
+                    sha256_names: self.sha256_names.clone(),
+                    sha256_seqs: self.sha256_seqs.clone(),
+                })
+            }
+            DigestLevel::Level2 => Ok(DigestResult {
+                sq_digest: DigestLevelResult::Level2(Level2Digest {
+                    names: self.names.clone(),
+                    lengths: self.lengths.clone(),
+                    sequences: self.sequences.clone(),
+                }),
+                sha256_names: self.sha256_names.clone(),
+                sha256_seqs: self.sha256_seqs.clone(),
+            }),
         }
-        let digest_str = utils::canonical_rep(&digest_json)?;
-        Ok(DigestResult {
-            sq_digest: digest_function.compute(digest_str.as_bytes()),
-            sha256_names: self.sha256_names.clone(),
-            sha256_seqs: self.sha256_seqs.clone(),
-        })
     }
 
     pub fn seqcol_obj(&self, c: DigestConfig) -> anyhow::Result<serde_json::Value> {
@@ -253,7 +392,7 @@ impl SeqCol {
         let digest_function = DigestFunction::default();
 
         let mut snlp_digests = vec![];
-        if let DigestConfig::WithSeqnameLenPairs = c {
+        if c.with_seqname_pairs {
             snlp_digests.reserve_exact(self.names.len());
 
             for (l, n) in self.lengths.iter().zip(self.names.iter()) {
@@ -276,7 +415,6 @@ impl SeqCol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noodles_sam;
     use std::fs::File;
     use std::io::BufReader;
 
@@ -298,9 +436,18 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.as_slice(), v.length().into())),
         );
-        let r = s.digest(DigestConfig::default()).unwrap();
-
-        assert_eq!(r.sq_digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
+        let r = s
+            .digest(DigestConfig {
+                level: DigestLevel::Level0,
+                with_seqname_pairs: false,
+            })
+            .unwrap();
+        match r.sq_digest {
+            DigestLevelResult::Level0(l0r) => {
+                assert_eq!(l0r.digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK")
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
@@ -309,22 +456,53 @@ mod tests {
         let reader = BufReader::new(file);
         let sc = serde_json::from_reader(reader).unwrap();
         let s = SeqCol::try_from_seqcol(&sc).unwrap();
-        let r = s.digest(DigestConfig::default()).unwrap();
-        assert_eq!(r.sq_digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK");
+        let r = s
+            .digest(DigestConfig {
+                level: DigestLevel::Level0,
+                with_seqname_pairs: false,
+            })
+            .unwrap();
+        match r.sq_digest {
+            DigestLevelResult::Level0(l0r) => {
+                assert_eq!(l0r.digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK")
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
     fn from_fasta_file_works_with_default() {
         let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
-        let r = s.digest(DigestConfig::default()).unwrap();
-        assert_eq!(r.sq_digest, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
+        let r = s
+            .digest(DigestConfig {
+                level: DigestLevel::Level0,
+                with_seqname_pairs: false,
+            })
+            .unwrap();
+        match r.sq_digest {
+            DigestLevelResult::Level0(l0r) => {
+                assert_eq!(l0r.digest, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
     fn from_fasta_file_works_with_seqname_length_pairs() {
         let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
-        let r = s.digest(DigestConfig::WithSeqnameLenPairs).unwrap();
-        assert_eq!(r.sq_digest, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
+        let r = s
+            .digest(DigestConfig {
+                level: DigestLevel::Level0,
+                with_seqname_pairs: true,
+            })
+            .unwrap();
+        eprintln!("digest to json : {}", r.to_json());
+        match r.sq_digest {
+            DigestLevelResult::Level0(l0r) => {
+                assert_eq!(l0r.digest, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
+            }
+            _ => unreachable!(),
+        }
         assert_eq!(
             r.sha256_names,
             Some("d3a44a65dac11f07a2aeea6f505e8134dad9e2f9af9c162b83f6df0ce6adbbe5".to_owned())
