@@ -167,10 +167,10 @@ pub enum DigestLevel {
 /// The configuration describing how a digest should
 /// be computed.
 pub struct DigestConfig {
-    level: DigestLevel,
+    pub level: DigestLevel,
     /// Compute the digest additionally including the
     /// sorted list of (sequence name, length) pair digests
-    with_seqname_pairs: bool,
+    pub with_seqname_pairs: bool,
 }
 
 /// The default configuration uses only the required fields
