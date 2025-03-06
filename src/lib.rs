@@ -44,6 +44,7 @@ pub struct Level1Digest {
     lengths: String,
     names: String,
     sequences: Option<String>,
+    sorted_name_length_pairs: Option<String>,
 }
 
 impl DigestToJson for Level1Digest {
@@ -63,6 +64,12 @@ impl DigestToJson for Level1Digest {
             repr.insert(
                 "sequences".to_owned(),
                 serde_json::Value::String(seq.clone()),
+            );
+        }
+        if let Some(snlp) = &self.sorted_name_length_pairs {
+            repr.insert(
+                "sorted_name_length_pairs".to_owned(),
+                serde_json::Value::String(snlp.clone()),
             );
         }
         serde_json::json!(repr)
@@ -342,15 +349,24 @@ impl SeqCol {
                 let mut names = String::new();
                 let mut lengths = String::new();
                 let mut sequences = None;
+                let mut sorted_name_length_pairs = None;
                 for (k, v) in sq_json.as_object().unwrap().iter() {
                     let v2 = utils::canonical_rep(v)?;
                     let h2 = digest_function.compute(v2.as_bytes());
-                    if k == "names" {
-                        names = h2;
-                    } else if k == "lengths" {
-                        lengths = h2;
-                    } else if k == "sequences" {
-                        sequences = Some(h2);
+                    match k.as_str() {
+                        "names" => {
+                            names = h2;
+                        }
+                        "lengths" => {
+                            lengths = h2;
+                        }
+                        "sequences" => {
+                            sequences = Some(h2);
+                        }
+                        "sorted_name_length_pairs" => {
+                            sorted_name_length_pairs = Some(h2);
+                        }
+                        _ => {}
                     }
                 }
                 Ok(DigestResult {
@@ -358,6 +374,7 @@ impl SeqCol {
                         names,
                         lengths,
                         sequences,
+                        sorted_name_length_pairs,
                     }),
                     sha256_names: self.sha256_names.clone(),
                     sha256_seqs: self.sha256_seqs.clone(),
@@ -496,7 +513,6 @@ mod tests {
                 with_seqname_pairs: true,
             })
             .unwrap();
-        eprintln!("digest to json : {}", r.to_json());
         match r.sq_digest {
             DigestLevelResult::Level0(l0r) => {
                 assert_eq!(l0r.digest, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
