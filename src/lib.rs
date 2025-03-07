@@ -293,41 +293,18 @@ impl SeqCol {
         let mut lengths = vec![];
         let mut seqs = vec![];
 
-        let mut seq_buf = Vec::<u8>::with_capacity(1_048_576);
-        let mut name_buf = Vec::<u8>::with_capacity(1_048_576);
-
         while let Some(record) = reader.next() {
             let seqrec = record?;
-            {
-                let seq_bytes = seqrec.normalize(false);
-                seq_buf.extend_from_slice(seq_bytes.as_ref());
-                //seq_sha_digest.update(seqrec.normalize(false).as_ref());
-                let h = digest_function.compute(seq_bytes.as_ref());
-                seqs.push(format!("SQ.{h}"));
-            }
+            let seq_bytes = seqrec.normalize(false);
+            seq_sha_digest.update(seq_bytes.as_ref());
+            let h = digest_function.compute(seq_bytes.as_ref());
+            seqs.push(format!("SQ.{h}"));
 
-            name_buf.extend_from_slice(seqrec.id());
-            //name_sha_digest.update(seq_name.as_bytes());
             let seq_name = std::str::from_utf8(seqrec.id())?.to_owned();
+            name_sha_digest.update(seq_name.as_bytes());
             names.push(seq_name);
 
             lengths.push(seqrec.num_bases());
-
-            if seq_buf.len() >= 1_048_576 {
-                seq_sha_digest.update(&seq_buf);
-                seq_buf.clear();
-            }
-            if name_buf.len() >= 1_048_576 {
-                name_sha_digest.update(&name_buf);
-                name_buf.clear();
-            }
-        }
-
-        if !seq_buf.is_empty() {
-            seq_sha_digest.update(&seq_buf);
-        }
-        if !name_buf.is_empty() {
-            name_sha_digest.update(&name_buf);
         }
 
         let sha256_names = hex::encode(name_sha_digest.finalize());
