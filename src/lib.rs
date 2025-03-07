@@ -23,7 +23,7 @@ pub trait DigestToJson {
 
 #[derive(Debug)]
 pub struct Level0Digest {
-    digest: String,
+    pub digest: String,
 }
 
 impl DigestToJson for Level0Digest {
@@ -41,10 +41,10 @@ impl DigestToJson for Level0Digest {
 
 #[derive(Debug)]
 pub struct Level1Digest {
-    lengths: String,
-    names: String,
-    sequences: Option<String>,
-    sorted_name_length_pairs: Option<String>,
+    pub lengths: String,
+    pub names: String,
+    pub sequences: Option<String>,
+    pub sorted_name_length_pairs: Option<String>,
 }
 
 impl DigestToJson for Level1Digest {
@@ -78,9 +78,9 @@ impl DigestToJson for Level1Digest {
 
 #[derive(Debug)]
 pub struct Level2Digest {
-    lengths: Vec<usize>,
-    names: Vec<String>,
-    sequences: Option<Vec<String>>,
+    pub lengths: Vec<usize>,
+    pub names: Vec<String>,
+    pub sequences: Option<Vec<String>>,
 }
 
 impl DigestToJson for Level2Digest {
@@ -124,9 +124,9 @@ impl DigestToJson for DigestLevelResult {
 /// may have sha256 digests for the names and or sequences.
 #[derive(Debug)]
 pub struct DigestResult {
-    sq_digest: DigestLevelResult,
-    sha256_names: Option<String>,
-    sha256_seqs: Option<String>,
+    pub sq_digest: DigestLevelResult,
+    pub sha256_names: Option<String>,
+    pub sha256_seqs: Option<String>,
 }
 
 impl DigestResult {
