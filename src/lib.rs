@@ -8,6 +8,8 @@ use std::path::Path;
 pub mod constants;
 pub mod utils;
 
+/// holds information relevant to seqcol
+/// signatures (and sha256 signatures)
 #[derive(Debug)]
 pub struct SeqCol {
     lengths: Vec<usize>,
@@ -17,10 +19,13 @@ pub struct SeqCol {
     sha256_seqs: Option<String>,
 }
 
+/// trait that converts a DigestResult to
+/// a `json` object.
 pub trait DigestToJson {
     fn to_json(&self) -> serde_json::Value;
 }
 
+/// just a top-level seqcol digest
 #[derive(Debug)]
 pub struct Level0Digest {
     pub digest: String,
@@ -39,6 +44,7 @@ impl DigestToJson for Level0Digest {
     }
 }
 
+/// a level 1 seqcol digest
 #[derive(Debug)]
 pub struct Level1Digest {
     pub lengths: String,
@@ -76,11 +82,13 @@ impl DigestToJson for Level1Digest {
     }
 }
 
+/// a level 2 seqcol digest
 #[derive(Debug)]
 pub struct Level2Digest {
     pub lengths: Vec<usize>,
     pub names: Vec<String>,
     pub sequences: Option<Vec<String>>,
+    pub sorted_name_length_pairs: Option<String>,
 }
 
 impl DigestToJson for Level2Digest {
@@ -168,7 +176,7 @@ pub enum DigestLevel {
 /// be computed.
 pub struct DigestConfig {
     pub level: DigestLevel,
-    /// Compute the digest additionally including the
+    /// Compute the digest of the
     /// sorted list of (sequence name, length) pair digests
     pub with_seqname_pairs: bool,
 }
@@ -380,16 +388,42 @@ impl SeqCol {
                     sha256_seqs: self.sha256_seqs.clone(),
                 })
             }
-            DigestLevel::Level2 => Ok(DigestResult {
-                sq_digest: DigestLevelResult::Level2(Level2Digest {
-                    names: self.names.clone(),
-                    lengths: self.lengths.clone(),
-                    sequences: self.sequences.clone(),
-                }),
-                sha256_names: self.sha256_names.clone(),
-                sha256_seqs: self.sha256_seqs.clone(),
-            }),
+            DigestLevel::Level2 => {
+                let snlp_digest_val = if c.with_seqname_pairs {
+                    let pairs = serde_json::Value::Array(self.get_sorted_name_len_pair_digests()?);
+                    let v = utils::canonical_rep(&pairs)?;
+                    Some(digest_function.compute(v.as_bytes()))
+                } else {
+                    None
+                };
+                Ok(DigestResult {
+                    sq_digest: DigestLevelResult::Level2(Level2Digest {
+                        names: self.names.clone(),
+                        lengths: self.lengths.clone(),
+                        sequences: self.sequences.clone(),
+                        sorted_name_length_pairs: snlp_digest_val,
+                    }),
+                    sha256_names: self.sha256_names.clone(),
+                    sha256_seqs: self.sha256_seqs.clone(),
+                })
+            }
         }
+    }
+
+    fn get_sorted_name_len_pair_digests(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let mut snlp_digests = vec![];
+        snlp_digests.reserve_exact(self.names.len());
+
+        let digest_function = DigestFunction::default();
+        for (l, n) in self.lengths.iter().zip(self.names.iter()) {
+            let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
+            snlp_digests.push(digest_function.compute(cr.as_bytes()));
+        }
+        snlp_digests.sort_unstable();
+        Ok(snlp_digests
+            .into_iter()
+            .map(serde_json::Value::String)
+            .collect())
     }
 
     pub fn seqcol_obj(&self, c: DigestConfig) -> anyhow::Result<serde_json::Value> {
@@ -406,24 +440,9 @@ impl SeqCol {
             );
         };
 
-        let digest_function = DigestFunction::default();
-
-        let mut snlp_digests = vec![];
         if c.with_seqname_pairs {
-            snlp_digests.reserve_exact(self.names.len());
-
-            for (l, n) in self.lengths.iter().zip(self.names.iter()) {
-                let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
-                snlp_digests.push(digest_function.compute(cr.as_bytes()));
-            }
-            snlp_digests.sort_unstable();
-
-            sq_json["sorted_name_length_pairs"] = serde_json::Value::Array(
-                snlp_digests
-                    .into_iter()
-                    .map(serde_json::Value::String)
-                    .collect(),
-            );
+            sq_json["sorted_name_length_pairs"] =
+                serde_json::Value::Array(self.get_sorted_name_len_pair_digests()?);
         }
         Ok(sq_json)
     }
