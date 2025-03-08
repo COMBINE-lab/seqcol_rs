@@ -191,6 +191,22 @@ impl Default for DigestConfig {
     }
 }
 
+impl DigestConfig {
+    pub fn with_level(level: DigestLevel) -> Self {
+        Self {
+            level,
+            with_seqname_pairs: false,
+        }
+    }
+
+    pub fn with_level_and_seqname_pairs(level: DigestLevel) -> Self {
+        Self {
+            level,
+            with_seqname_pairs: true,
+        }
+    }
+}
+
 pub struct DigestFunction {
     digest: fn(&[u8]) -> String,
 }
