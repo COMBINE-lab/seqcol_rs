@@ -324,9 +324,17 @@ impl SeqCol {
             let h = digest_function.compute(seq_bytes.as_ref());
             seqs.push(format!("SQ.{h}"));
 
-            let seq_name = std::str::from_utf8(seqrec.id())?.to_owned();
-            name_sha_digest.update(seq_name.as_bytes());
-            names.push(seq_name);
+            // take the record name up to the first whitespace
+            if let Some(seq_name) = std::str::from_utf8(seqrec.id())?
+                .split_whitespace()
+                .next()
+                .map(str::to_owned)
+            {
+                name_sha_digest.update(seq_name.as_bytes());
+                names.push(seq_name);
+            } else {
+                anyhow::bail!("cannot process data with empty sequence names!")
+            };
 
             lengths.push(seqrec.num_bases());
         }
@@ -572,6 +580,23 @@ mod tests {
         match r.sq_digest {
             DigestLevelResult::Level0(l0r) => {
                 assert_eq!(l0r.digest, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn from_fasta_file_works_with_default2() {
+        let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple2.fa")).unwrap();
+        let r = s
+            .digest(DigestConfig {
+                level: DigestLevel::Level0,
+                with_seqname_pairs: false,
+            })
+            .unwrap();
+        match r.sq_digest {
+            DigestLevelResult::Level0(l0r) => {
+                assert_eq!(l0r.digest, "zsWu-iN7EJt5-8_inZOugaAg3eT-unK3");
             }
             _ => unreachable!(),
         }
