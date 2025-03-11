@@ -343,6 +343,44 @@ impl SeqCol {
         })
     }
 
+    /// Takes an iterator `it` over pairs of sequence names and seqeuences, and populates
+    /// this [SeqCol] object from the contents of the iterator.
+    pub fn try_from_name_seq_iter<I>(it: I) -> anyhow::Result<Self>
+    where
+        I: IntoIterator<Item = (String, String)>,
+    {
+        let digest_function = DigestFunction::default();
+        let mut name_sha_digest = Sha256::new();
+        let mut seq_sha_digest = Sha256::new();
+
+        let mut names = vec![];
+        let mut lengths = vec![];
+        let mut seqs = vec![];
+
+        for (name, seq) in it {
+            seq_sha_digest.update(&seq);
+            let h = digest_function.compute(seq.as_ref());
+            seqs.push(format!("SQ.{h}"));
+
+            let seq_name = std::str::from_utf8(name.as_bytes())?;
+            name_sha_digest.update(seq_name.as_bytes());
+            names.push(seq_name.to_string());
+
+            lengths.push(seq.len());
+        }
+
+        let sha256_names = hex::encode(name_sha_digest.finalize());
+        let sha256_seqs = hex::encode(seq_sha_digest.finalize());
+
+        Ok(Self {
+            lengths,
+            names,
+            sequences: Some(seqs),
+            sha256_names: Some(sha256_names),
+            sha256_seqs: Some(sha256_seqs),
+        })
+    }
+
     /// Computes and returns the [SeqCol] digest of the current [SeqCol] object.
     /// The [DigestConfig] parameter `c` controls what fields are used to compute the digest.
     ///
