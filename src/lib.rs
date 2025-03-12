@@ -365,14 +365,15 @@ impl SeqCol {
         let mut lengths = vec![];
         let mut seqs = vec![];
 
+        // iterate over the name sequence pairs and add them
+        // to the seqcol digest (and update the sha digests)
         for (name, seq) in it {
             seq_sha_digest.update(&seq);
             let h = digest_function.compute(seq.as_ref());
             seqs.push(format!("SQ.{h}"));
 
-            let seq_name = std::str::from_utf8(name.as_bytes())?;
-            name_sha_digest.update(seq_name.as_bytes());
-            names.push(seq_name.to_string());
+            name_sha_digest.update(name.as_bytes());
+            names.push(name);
 
             lengths.push(seq.len());
         }
