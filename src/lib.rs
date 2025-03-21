@@ -8,15 +8,144 @@ use std::path::Path;
 pub mod constants;
 pub mod utils;
 
+pub(crate) const INHERENT_ATTRIBUTES: [&str; 2] = ["names", "sequences"];
+
 /// holds information relevant to seqcol
 /// signatures (and sha256 signatures)
 #[derive(Debug)]
 pub struct SeqCol {
-    lengths: Vec<usize>,
-    names: Vec<String>,
-    sequences: Option<Vec<String>>,
+    attributes: Vec<SeqColAttribute>,
     sha256_names: Option<String>,
     sha256_seqs: Option<String>,
+}
+
+impl SeqCol {
+    pub fn names(&self) -> anyhow::Result<Vec<String>> {
+        let mut v = None;
+        for x in &self.attributes {
+            if let SeqColAttribute::Names(x) = x {
+                v = Some(x.clone());
+            };
+        }
+        v.ok_or(anyhow::anyhow!(
+            "The attribute 'names' was not present in this seqcol object."
+        ))
+    }
+
+    pub fn lengths(&self) -> anyhow::Result<Vec<usize>> {
+        let mut v = None;
+        for x in &self.attributes {
+            if let SeqColAttribute::Lengths(x) = x {
+                v = Some(x.clone());
+            }
+        }
+        v.ok_or(anyhow::anyhow!(
+            "The attribute 'length' was not present in this seqcol object."
+        ))
+    }
+
+    pub fn sequences(&self) -> anyhow::Result<Vec<String>> {
+        let mut v = None;
+        for x in &self.attributes {
+            if let SeqColAttribute::Sequences(x) = x {
+                v = Some(x.clone());
+            }
+        }
+        v.ok_or(anyhow::anyhow!(
+            "The attribute 'sequences' was not present in this seqcol object."
+        ))
+    }
+}
+
+#[derive(Debug)]
+pub enum SeqColAttribute {
+    Lengths(Vec<usize>),
+    Names(Vec<String>),
+    Sequences(Vec<String>),
+    SortedSequences(Vec<String>),
+    NameLengthPairs(Vec<(String, usize)>),
+    SortedNameLengthPairs(Vec<(String, usize)>),
+}
+
+impl SeqColAttribute {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Lengths(_) => "lengths",
+            Self::Names(_) => "names",
+            Self::Sequences(_) => "sequences",
+            Self::SortedSequences(_) => "sorted_sequences",
+            Self::NameLengthPairs(_) => "name_length_pairs",
+            Self::SortedNameLengthPairs(_) => "sorted_name_length_pairs",
+        }
+    }
+
+    pub fn is_inherent(&self) -> bool {
+        matches!(self, Self::Names(_) | Self::Sequences(_))
+    }
+
+    pub fn is_required(&self) -> bool {
+        matches!(self, Self::Names(_) | Self::Sequences(_) | Self::Lengths(_))
+    }
+
+    pub fn is_collated(&self) -> bool {
+        matches!(
+            self,
+            Self::Names(_) | Self::Sequences(_) | Self::Lengths(_) | Self::NameLengthPairs(_)
+        )
+    }
+
+    fn try_into_level2_repr(&self) -> anyhow::Result<serde_json::Value> {
+        match self {
+            Self::Lengths(l) => Ok(serde_json::Value::Array(
+                l.iter().map(|x| json!(*x as u64)).collect(),
+            )),
+            Self::Names(n) => Ok(serde_json::Value::Array(
+                n.iter().map(|x| json!(x)).collect(),
+            )),
+            Self::Sequences(s) => Ok(serde_json::Value::Array(
+                s.iter().map(|x| json!(x)).collect(),
+            )),
+            Self::SortedSequences(s) => Ok(serde_json::Value::Array(
+                s.iter().map(|x| json!(x)).collect(),
+            )),
+            Self::NameLengthPairs(nlp) => Ok(serde_json::Value::Array(
+                nlp.iter()
+                    .map(|(n, l)| json!({ "name" : n, "length" : *l as u64}))
+                    .collect(),
+            )),
+            Self::SortedNameLengthPairs(snlp) => {
+                let digest_function = DigestFunction::default();
+                let mut digests: Vec<String> = snlp
+                    .iter()
+                    .map(|(n, l)| {
+                        let j = json!({ "name" : n, "length" : *l as u64});
+                        let v2 = utils::canonical_rep(&j).expect("should have canoncal repr");
+                        let h2 = digest_function.compute(v2.as_bytes());
+                        h2
+                    })
+                    .collect();
+                digests.sort_unstable();
+                Ok(json!(digests))
+            }
+        }
+    }
+
+    pub fn try_into_level_repr(&self, level: DigestLevel) -> anyhow::Result<serde_json::Value> {
+        match level {
+            DigestLevel::Level2 => self.try_into_level2_repr(),
+            DigestLevel::Level1 => {
+                let digest_function = DigestFunction::default();
+                let l2 = self.try_into_level2_repr()?;
+                let v2 = utils::canonical_rep(&l2)?;
+                Ok(serde_json::Value::String(
+                    digest_function.compute(v2.as_bytes()),
+                ))
+            }
+            DigestLevel::Level0 => {
+                anyhow::bail!("It does not make sense to try to convert an individual seqcol attribute into a level 0 representation")
+            }
+        }
+    }
 }
 
 /// trait that converts a DigestResult to
@@ -37,7 +166,7 @@ impl DigestToJson for Level0Digest {
         let lvl: serde_json::Value = 0_u32.into();
         repr.insert("level".to_owned(), lvl);
         repr.insert(
-            "seqcol_digest".to_owned(),
+            "digest".to_owned(),
             serde_json::Value::String(self.digest.clone()),
         );
         serde_json::json!(repr)
@@ -47,10 +176,7 @@ impl DigestToJson for Level0Digest {
 /// a level 1 seqcol digest
 #[derive(Debug)]
 pub struct Level1Digest {
-    pub lengths: String,
-    pub names: String,
-    pub sequences: Option<String>,
-    pub sorted_name_length_pairs: Option<String>,
+    digests: serde_json::Value,
 }
 
 impl DigestToJson for Level1Digest {
@@ -58,26 +184,15 @@ impl DigestToJson for Level1Digest {
         let mut repr = serde_json::map::Map::new();
         let lvl: serde_json::Value = 1_u32.into();
         repr.insert("level".to_owned(), lvl);
-        repr.insert(
-            "lengths".to_owned(),
-            serde_json::Value::String(self.lengths.clone()),
-        );
-        repr.insert(
-            "names".to_owned(),
-            serde_json::Value::String(self.names.clone()),
-        );
-        if let Some(seq) = &self.sequences {
-            repr.insert(
-                "sequences".to_owned(),
-                serde_json::Value::String(seq.clone()),
-            );
+        for (k, v) in self
+            .digests
+            .as_object()
+            .expect("should be an object")
+            .clone()
+        {
+            repr.insert(k, v);
         }
-        if let Some(snlp) = &self.sorted_name_length_pairs {
-            repr.insert(
-                "sorted_name_length_pairs".to_owned(),
-                serde_json::Value::String(snlp.clone()),
-            );
-        }
+
         serde_json::json!(repr)
     }
 }
@@ -85,28 +200,23 @@ impl DigestToJson for Level1Digest {
 /// a level 2 seqcol digest
 #[derive(Debug)]
 pub struct Level2Digest {
-    pub lengths: Vec<usize>,
-    pub names: Vec<String>,
-    pub sequences: Option<Vec<String>>,
-    pub sorted_name_length_pairs: Option<String>,
+    pub digests: serde_json::Value,
 }
 
 impl DigestToJson for Level2Digest {
     fn to_json(&self) -> serde_json::Value {
-        if self.sequences.is_some() {
-            serde_json::json!({
-                "level" : 2,
-                "lengths" : self.lengths,
-                "names" : self.names,
-                "sequences" : self.sequences.clone().expect("non-empty")
-            })
-        } else {
-            serde_json::json!({
-                "level" : 2,
-                "lengths" : self.lengths,
-                "names" : self.names,
-            })
+        let mut repr = serde_json::map::Map::new();
+        let lvl: serde_json::Value = 2_u32.into();
+        repr.insert("level".to_owned(), lvl);
+        for (k, v) in self
+            .digests
+            .as_object()
+            .expect("should be an object")
+            .clone()
+        {
+            repr.insert(k, v);
         }
+        serde_json::json!(repr)
     }
 }
 
@@ -157,12 +267,6 @@ impl DigestResult {
     }
 }
 
-#[allow(dead_code)]
-pub enum DigestKeyType {
-    Required(String),
-    Optional(String),
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum DigestLevel {
     Level0,
@@ -170,15 +274,21 @@ pub enum DigestLevel {
     Level2,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
+pub enum KnownAttr {
+    NameLengthPairs,
+    SortedNameLengthPairs,
+    SortedSequences,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
 /// The configuration describing how a digest should
 /// be computed.
 pub struct DigestConfig {
     pub level: DigestLevel,
-    /// Compute the digest of the
-    /// sorted list of (sequence name, length) pair digests
-    pub with_seqname_pairs: bool,
+    /// additional attributes to include
+    pub additional_attr: Vec<KnownAttr>,
 }
 
 /// The default configuration uses only the required fields
@@ -186,7 +296,7 @@ impl Default for DigestConfig {
     fn default() -> Self {
         Self {
             level: DigestLevel::Level1,
-            with_seqname_pairs: false,
+            additional_attr: vec![],
         }
     }
 }
@@ -195,14 +305,14 @@ impl DigestConfig {
     pub fn with_level(level: DigestLevel) -> Self {
         Self {
             level,
-            with_seqname_pairs: false,
+            additional_attr: vec![],
         }
     }
 
-    pub fn with_level_and_seqname_pairs(level: DigestLevel) -> Self {
+    pub fn with_level_and_additional_attrs(level: DigestLevel, attr: &[KnownAttr]) -> Self {
         Self {
             level,
-            with_seqname_pairs: true,
+            additional_attr: attr.to_vec(),
         }
     }
 }
@@ -241,10 +351,13 @@ impl SeqCol {
             lengths.push(l);
         }
 
+        let attributes = vec![
+            SeqColAttribute::Names(names),
+            SeqColAttribute::Lengths(lengths),
+        ];
+
         Self {
-            lengths,
-            names,
-            sequences: None,
+            attributes,
             sha256_names: None,
             sha256_seqs: None,
         }
@@ -288,10 +401,15 @@ impl SeqCol {
                     .collect()
             });
 
+            let mut attributes = vec![
+                SeqColAttribute::Names(names),
+                SeqColAttribute::Lengths(lengths),
+            ];
+            if let Some(seqs) = sequences {
+                attributes.push(SeqColAttribute::Sequences(seqs));
+            }
             Ok(Self {
-                lengths,
-                names,
-                sequences,
+                attributes,
                 sha256_names: None,
                 sha256_seqs: None,
             })
@@ -342,10 +460,13 @@ impl SeqCol {
         let sha256_names = hex::encode(name_sha_digest.finalize());
         let sha256_seqs = hex::encode(seq_sha_digest.finalize());
 
+        let attributes = vec![
+            SeqColAttribute::Names(names),
+            SeqColAttribute::Lengths(lengths),
+            SeqColAttribute::Sequences(seqs),
+        ];
         Ok(Self {
-            lengths,
-            names,
-            sequences: Some(seqs),
+            attributes,
             sha256_names: Some(sha256_names),
             sha256_seqs: Some(sha256_seqs),
         })
@@ -381,13 +502,42 @@ impl SeqCol {
         let sha256_names = hex::encode(name_sha_digest.finalize());
         let sha256_seqs = hex::encode(seq_sha_digest.finalize());
 
+        let attributes = vec![
+            SeqColAttribute::Names(names),
+            SeqColAttribute::Lengths(lengths),
+            SeqColAttribute::Sequences(seqs),
+        ];
         Ok(Self {
-            lengths,
-            names,
-            sequences: Some(seqs),
+            attributes,
             sha256_names: Some(sha256_names),
             sha256_seqs: Some(sha256_seqs),
         })
+    }
+
+    fn get_derived_attr(&self, att: KnownAttr) -> anyhow::Result<SeqColAttribute> {
+        match att {
+            KnownAttr::NameLengthPairs => {
+                let names = self.names()?;
+                let lens = self.lengths()?;
+                assert_eq!(names.len(), lens.len());
+                Ok(SeqColAttribute::NameLengthPairs(
+                    names.into_iter().zip(lens).collect(),
+                ))
+            }
+            KnownAttr::SortedNameLengthPairs => {
+                let names = self.names()?;
+                let lens = self.lengths()?;
+                assert_eq!(names.len(), lens.len());
+                let mut nlp: Vec<(String, usize)> = names.into_iter().zip(lens).collect();
+                nlp.sort_unstable();
+                Ok(SeqColAttribute::SortedNameLengthPairs(nlp))
+            }
+            KnownAttr::SortedSequences => {
+                let mut sequences = self.sequences()?;
+                sequences.sort_unstable();
+                Ok(SeqColAttribute::SortedSequences(sequences))
+            }
+        }
     }
 
     /// Computes and returns the [SeqCol] digest of the current [SeqCol] object.
@@ -395,17 +545,26 @@ impl SeqCol {
     ///
     /// Returns [Ok]`(`[String]`)` on success, representing the computed digest
     /// or otherwise an error describing why the digest could not be computed.
-    pub fn digest(&self, c: DigestConfig) -> anyhow::Result<DigestResult> {
+    pub fn digest(&mut self, c: DigestConfig) -> anyhow::Result<DigestResult> {
         let digest_function = DigestFunction::default();
         match c.level {
             DigestLevel::Level0 => {
-                let sq_json = self.seqcol_obj(c)?;
+                let mut inherent_set: Vec<&str> = vec![];
                 let mut digest_json = json!({});
-                for (k, v) in sq_json.as_object().unwrap().iter() {
-                    let v2 = utils::canonical_rep(v)?;
-                    let h2 = digest_function.compute(v2.as_bytes());
-                    digest_json[k] = serde_json::Value::String(h2);
+                for attr in &self.attributes {
+                    if attr.is_inherent() {
+                        digest_json[attr.name()] = attr.try_into_level_repr(DigestLevel::Level1)?;
+                        inherent_set.push(attr.name());
+                    } else if !attr.is_required() {
+                        eprintln!("Note: The level 0 digest depends only on inherent attributes, but {} is neither inherent nor required. \
+                                   Consider not requesting this attribute at all if you only want a level 0 digest", attr.name());
+                    }
                 }
+                inherent_set.sort_unstable();
+                if inherent_set.len() != INHERENT_ATTRIBUTES.len() {
+                    anyhow::bail!("level 0 digest requires all inherent attributes {:?}, but this seqcol object had only {:?}", INHERENT_ATTRIBUTES, inherent_set);
+                }
+
                 let digest_str = utils::canonical_rep(&digest_json)?;
                 Ok(DigestResult {
                     sq_digest: DigestLevelResult::Level0(Level0Digest {
@@ -416,56 +575,36 @@ impl SeqCol {
                 })
             }
             DigestLevel::Level1 => {
-                let sq_json = self.seqcol_obj(c)?;
-                let mut names = String::new();
-                let mut lengths = String::new();
-                let mut sequences = None;
-                let mut sorted_name_length_pairs = None;
-                for (k, v) in sq_json.as_object().unwrap().iter() {
-                    let v2 = utils::canonical_rep(v)?;
-                    let h2 = digest_function.compute(v2.as_bytes());
-                    match k.as_str() {
-                        "names" => {
-                            names = h2;
-                        }
-                        "lengths" => {
-                            lengths = h2;
-                        }
-                        "sequences" => {
-                            sequences = Some(h2);
-                        }
-                        "sorted_name_length_pairs" => {
-                            sorted_name_length_pairs = Some(h2);
-                        }
-                        _ => {}
-                    }
+                let mut additional_attr = Vec::with_capacity(c.additional_attr.len());
+                for requested_attr in c.additional_attr {
+                    additional_attr.push(self.get_derived_attr(requested_attr)?);
+                }
+                self.attributes.extend(additional_attr);
+
+                let mut res = json!({});
+                for attr in &self.attributes {
+                    res[attr.name()] = attr.try_into_level_repr(DigestLevel::Level1)?;
                 }
                 Ok(DigestResult {
-                    sq_digest: DigestLevelResult::Level1(Level1Digest {
-                        names,
-                        lengths,
-                        sequences,
-                        sorted_name_length_pairs,
-                    }),
+                    sq_digest: DigestLevelResult::Level1(Level1Digest { digests: res }),
                     sha256_names: self.sha256_names.clone(),
                     sha256_seqs: self.sha256_seqs.clone(),
                 })
             }
             DigestLevel::Level2 => {
-                let snlp_digest_val = if c.with_seqname_pairs {
-                    let pairs = serde_json::Value::Array(self.get_sorted_name_len_pair_digests()?);
-                    let v = utils::canonical_rep(&pairs)?;
-                    Some(digest_function.compute(v.as_bytes()))
-                } else {
-                    None
-                };
+                let mut res = json!({});
+
+                let mut additional_attr = Vec::with_capacity(c.additional_attr.len());
+                for requested_attr in c.additional_attr {
+                    additional_attr.push(self.get_derived_attr(requested_attr)?);
+                }
+                self.attributes.extend(additional_attr);
+
+                for attr in &self.attributes {
+                    res[attr.name()] = attr.try_into_level_repr(DigestLevel::Level2)?;
+                }
                 Ok(DigestResult {
-                    sq_digest: DigestLevelResult::Level2(Level2Digest {
-                        names: self.names.clone(),
-                        lengths: self.lengths.clone(),
-                        sequences: self.sequences.clone(),
-                        sorted_name_length_pairs: snlp_digest_val,
-                    }),
+                    sq_digest: DigestLevelResult::Level2(Level2Digest { digests: res }),
                     sha256_names: self.sha256_names.clone(),
                     sha256_seqs: self.sha256_seqs.clone(),
                 })
@@ -473,39 +612,17 @@ impl SeqCol {
         }
     }
 
-    fn get_sorted_name_len_pair_digests(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-        let mut snlp_digests = vec![];
-        snlp_digests.reserve_exact(self.names.len());
+    pub fn seqcol_obj(&mut self, c: DigestConfig) -> anyhow::Result<serde_json::Value> {
+        let mut sq_json = json!({});
 
-        let digest_function = DigestFunction::default();
-        for (l, n) in self.lengths.iter().zip(self.names.iter()) {
-            let cr = utils::canonical_rep(&json!({"length" : l, "name" : n}))?;
-            snlp_digests.push(digest_function.compute(cr.as_bytes()));
+        let mut additional_attr = Vec::with_capacity(c.additional_attr.len());
+        for requested_attr in c.additional_attr {
+            additional_attr.push(self.get_derived_attr(requested_attr)?);
         }
-        snlp_digests.sort_unstable();
-        Ok(snlp_digests
-            .into_iter()
-            .map(serde_json::Value::String)
-            .collect())
-    }
+        self.attributes.extend(additional_attr);
 
-    pub fn seqcol_obj(&self, c: DigestConfig) -> anyhow::Result<serde_json::Value> {
-        let mut sq_json = json!({
-            "lengths" : self.lengths,
-            "names" : self.names,
-        });
-
-        if let Some(v) = &self.sequences {
-            sq_json["sequences"] = serde_json::Value::Array(
-                v.iter()
-                    .map(|x| serde_json::Value::String(x.to_string()))
-                    .collect(),
-            );
-        };
-
-        if c.with_seqname_pairs {
-            sq_json["sorted_name_length_pairs"] =
-                serde_json::Value::Array(self.get_sorted_name_len_pair_digests()?);
+        for attr in &self.attributes {
+            sq_json[attr.name()] = attr.try_into_level_repr(DigestLevel::Level2)?;
         }
         Ok(sq_json)
     }
