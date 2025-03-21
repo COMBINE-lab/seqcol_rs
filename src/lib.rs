@@ -344,12 +344,15 @@ impl SeqCol {
     where
         I: IntoIterator<Item = (&'a [u8], usize)>,
     {
+        let mut name_sha_digest = Sha256::new();
         let mut names = Vec::new();
         let mut lengths = Vec::new();
         for (n, l) in it {
+            name_sha_digest.update(n);
             names.push(std::str::from_utf8(n).unwrap().to_owned());
             lengths.push(l);
         }
+        let sha256_names = hex::encode(name_sha_digest.finalize());
 
         let attributes = vec![
             SeqColAttribute::Names(names),
@@ -358,7 +361,7 @@ impl SeqCol {
 
         Self {
             attributes,
-            sha256_names: None,
+            sha256_names: Some(sha256_names),
             sha256_seqs: None,
         }
     }
