@@ -1,5 +1,5 @@
 use crate::constants;
-use base64::{prelude::BASE64_URL_SAFE, Engine as _};
+use base64::{Engine as _, prelude::BASE64_URL_SAFE};
 use sha2::{Digest, Sha512};
 
 #[inline(always)]
