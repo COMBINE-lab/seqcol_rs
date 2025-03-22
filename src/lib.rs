@@ -143,7 +143,9 @@ impl SeqColAttribute {
                 ))
             }
             DigestLevel::Level0 => {
-                anyhow::bail!("It does not make sense to try to convert an individual seqcol attribute into a level 0 representation")
+                anyhow::bail!(
+                    "It does not make sense to try to convert an individual seqcol attribute into a level 0 representation"
+                )
             }
         }
     }
@@ -584,13 +586,20 @@ impl SeqCol {
                         digest_json[attr.name()] = attr.try_into_level_repr(DigestLevel::Level1)?;
                         inherent_set.push(attr.name());
                     } else if !attr.is_required() {
-                        warn!("Note: The level 0 digest depends only on inherent attributes, but {} is neither inherent nor required. \
-                                   Consider not requesting this attribute at all if you only want a level 0 digest", attr.name());
+                        warn!(
+                            "Note: The level 0 digest depends only on inherent attributes, but {} is neither inherent nor required. \
+                                   Consider not requesting this attribute at all if you only want a level 0 digest",
+                            attr.name()
+                        );
                     }
                 }
                 inherent_set.sort_unstable();
                 if inherent_set.len() != INHERENT_ATTRIBUTES.len() {
-                    anyhow::bail!("level 0 digest requires all inherent attributes {:?}, but this seqcol object had only {:?}", INHERENT_ATTRIBUTES, inherent_set);
+                    anyhow::bail!(
+                        "level 0 digest requires all inherent attributes {:?}, but this seqcol object had only {:?}",
+                        INHERENT_ATTRIBUTES,
+                        inherent_set
+                    );
                 }
 
                 let digest_str = utils::canonical_rep(&digest_json)?;
