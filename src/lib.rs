@@ -4,6 +4,7 @@ use serde_json::json;
 use sha2::Digest as ShaDigest;
 use sha2::Sha256;
 use std::path::Path;
+use tracing::{trace, warn};
 
 pub mod constants;
 pub mod utils;
@@ -344,6 +345,7 @@ impl SeqCol {
     where
         I: IntoIterator<Item = (&'a [u8], usize)>,
     {
+        trace!("building seqcol from SAM/BAM header");
         let mut name_sha_digest = Sha256::new();
         let mut names = Vec::new();
         let mut lengths = Vec::new();
@@ -352,6 +354,15 @@ impl SeqCol {
             names.push(std::str::from_utf8(n).unwrap().to_owned());
             lengths.push(l);
         }
+        assert_eq!(
+            names.len(),
+            lengths.len(),
+            "the names (len {}) and lengths (len {}) must be the same.",
+            names.len(),
+            lengths.len()
+        );
+
+        trace!("finalizing the sha256 name digest");
         let sha256_names = hex::encode(name_sha_digest.finalize());
 
         let attributes = vec![
@@ -371,6 +382,7 @@ impl SeqCol {
     /// This returns an [Ok]`(`[SeqCol]``)` if successful, or an error if the
     /// object couldn't be constructed (e.g. required fields were missing, etc.).
     pub fn try_from_seqcol(sc: &serde_json::Value) -> anyhow::Result<Self> {
+        trace!("building seqcol from input seqcol JSON");
         // The  input seqcol object must be of type `Object`
         if let Some(seqcol) = sc.as_object() {
             // we *must* have a lengths field
@@ -397,6 +409,7 @@ impl SeqCol {
 
             // we *may* have a sequences field
             let sequences = seqcol.get("sequences").map(|seqs| {
+                trace!("sequences were present, so including them");
                 seqs.as_array()
                     .unwrap()
                     .iter()
@@ -426,6 +439,7 @@ impl SeqCol {
     /// Returns [Ok]`(`[SeqCol]`)` on success or otherwise an error describing
     /// why the [SeqCol] object could not be constructed.
     pub fn try_from_fasta_file<P: AsRef<Path>>(fp: P) -> anyhow::Result<Self> {
+        trace!("building seqcol from FASTA : {}", fp.as_ref().display());
         let mut reader = needletail::parse_fastx_file(&fp).with_context(|| {
             format!("cannot parse FASTA records from {}", &fp.as_ref().display())
         })?;
@@ -459,7 +473,14 @@ impl SeqCol {
 
             lengths.push(seqrec.num_bases());
         }
+        trace!(
+            "added {} sequences, {} names, and {} lengths to the seqcol object.",
+            seqs.len(),
+            lengths.len(),
+            names.len()
+        );
 
+        trace!("finalizing sha256 hashes");
         let sha256_names = hex::encode(name_sha_digest.finalize());
         let sha256_seqs = hex::encode(seq_sha_digest.finalize());
 
@@ -481,6 +502,7 @@ impl SeqCol {
     where
         I: IntoIterator<Item = (String, String)>,
     {
+        trace!("building seqcol from name & sequence iterator");
         let digest_function = DigestFunction::default();
         let mut name_sha_digest = Sha256::new();
         let mut seq_sha_digest = Sha256::new();
@@ -517,7 +539,9 @@ impl SeqCol {
         })
     }
 
-    fn get_derived_attr(&self, att: KnownAttr) -> anyhow::Result<SeqColAttribute> {
+    /// tries to get a derived attribute from the seqcol object, returns an error if
+    /// the neceesary underlying attributes are not available.
+    fn try_gen_derived_attr(&self, att: KnownAttr) -> anyhow::Result<SeqColAttribute> {
         match att {
             KnownAttr::NameLengthPairs => {
                 let names = self.names()?;
@@ -559,7 +583,7 @@ impl SeqCol {
                         digest_json[attr.name()] = attr.try_into_level_repr(DigestLevel::Level1)?;
                         inherent_set.push(attr.name());
                     } else if !attr.is_required() {
-                        eprintln!("Note: The level 0 digest depends only on inherent attributes, but {} is neither inherent nor required. \
+                        warn!("Note: The level 0 digest depends only on inherent attributes, but {} is neither inherent nor required. \
                                    Consider not requesting this attribute at all if you only want a level 0 digest", attr.name());
                     }
                 }
@@ -580,7 +604,7 @@ impl SeqCol {
             DigestLevel::Level1 => {
                 let mut additional_attr = Vec::with_capacity(c.additional_attr.len());
                 for requested_attr in c.additional_attr {
-                    additional_attr.push(self.get_derived_attr(requested_attr)?);
+                    additional_attr.push(self.try_gen_derived_attr(requested_attr)?);
                 }
                 self.attributes.extend(additional_attr);
 
@@ -599,7 +623,7 @@ impl SeqCol {
 
                 let mut additional_attr = Vec::with_capacity(c.additional_attr.len());
                 for requested_attr in c.additional_attr {
-                    additional_attr.push(self.get_derived_attr(requested_attr)?);
+                    additional_attr.push(self.try_gen_derived_attr(requested_attr)?);
                 }
                 self.attributes.extend(additional_attr);
 
@@ -620,7 +644,7 @@ impl SeqCol {
 
         let mut additional_attr = Vec::with_capacity(c.additional_attr.len());
         for requested_attr in c.additional_attr {
-            additional_attr.push(self.get_derived_attr(requested_attr)?);
+            additional_attr.push(self.try_gen_derived_attr(requested_attr)?);
         }
         self.attributes.extend(additional_attr);
 
@@ -649,7 +673,7 @@ mod tests {
 ";
         let header: noodles_sam::Header = s.parse().unwrap();
 
-        let s = SeqCol::from_sam_header(
+        let mut s = SeqCol::from_sam_header(
             header
                 .reference_sequences()
                 .iter()
@@ -657,13 +681,15 @@ mod tests {
         );
         let r = s
             .digest(DigestConfig {
-                level: DigestLevel::Level0,
-                with_seqname_pairs: false,
+                level: DigestLevel::Level1,
+                additional_attr: vec![],
             })
             .unwrap();
         match r.sq_digest {
-            DigestLevelResult::Level0(l0r) => {
-                assert_eq!(l0r.digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK")
+            DigestLevelResult::Level1(l0r) => {
+                let o = l0r.digests.as_object().expect("should be object");
+                assert_eq!(o["names"], "LWuQVxGBc6yh1HllmgIFi-nPyblR3uHB");
+                assert_eq!(o["lengths"], "WLhTcZKenX4NNp-E4wV9Gel8sQur8Mx_");
             }
             _ => unreachable!(),
         }
@@ -674,16 +700,18 @@ mod tests {
         let file = File::open("test_data/seqcol_obj.json").expect("can't open input seqcol file");
         let reader = BufReader::new(file);
         let sc = serde_json::from_reader(reader).unwrap();
-        let s = SeqCol::try_from_seqcol(&sc).unwrap();
+        let mut s = SeqCol::try_from_seqcol(&sc).unwrap();
         let r = s
             .digest(DigestConfig {
-                level: DigestLevel::Level0,
-                with_seqname_pairs: false,
+                level: DigestLevel::Level1,
+                additional_attr: vec![],
             })
             .unwrap();
         match r.sq_digest {
-            DigestLevelResult::Level0(l0r) => {
-                assert_eq!(l0r.digest, "2HqWKZw8F4VY7q9sfYRM-JJ_RaMXv1eK")
+            DigestLevelResult::Level1(l1r) => {
+                let o = l1r.digests.as_object().expect("should be an object");
+                assert_eq!(o["names"], "LWuQVxGBc6yh1HllmgIFi-nPyblR3uHB");
+                assert_eq!(o["lengths"], "WLhTcZKenX4NNp-E4wV9Gel8sQur8Mx_");
             }
             _ => unreachable!(),
         }
@@ -691,16 +719,16 @@ mod tests {
 
     #[test]
     fn from_fasta_file_works_with_default() {
-        let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
+        let mut s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s
             .digest(DigestConfig {
                 level: DigestLevel::Level0,
-                with_seqname_pairs: false,
+                additional_attr: vec![],
             })
             .unwrap();
         match r.sq_digest {
             DigestLevelResult::Level0(l0r) => {
-                assert_eq!(l0r.digest, "E0cJxnAB5lrWXGP_JoWRNWKEDfdPUDUR");
+                assert_eq!(l0r.digest, "stUei2iylpHEBdqd7msy6r3Jytw-25kx");
             }
             _ => unreachable!(),
         }
@@ -708,16 +736,16 @@ mod tests {
 
     #[test]
     fn from_fasta_file_works_with_default2() {
-        let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple2.fa")).unwrap();
+        let mut s = SeqCol::try_from_fasta_file(Path::new("test_data/simple2.fa")).unwrap();
         let r = s
             .digest(DigestConfig {
                 level: DigestLevel::Level0,
-                with_seqname_pairs: false,
+                additional_attr: vec![],
             })
             .unwrap();
         match r.sq_digest {
             DigestLevelResult::Level0(l0r) => {
-                assert_eq!(l0r.digest, "zsWu-iN7EJt5-8_inZOugaAg3eT-unK3");
+                assert_eq!(l0r.digest, "LTqhqr7FsgrkfyM-fpbOJTDfuoWZ7kej");
             }
             _ => unreachable!(),
         }
@@ -725,16 +753,20 @@ mod tests {
 
     #[test]
     fn from_fasta_file_works_with_seqname_length_pairs() {
-        let s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
+        let mut s = SeqCol::try_from_fasta_file(Path::new("test_data/simple.fa")).unwrap();
         let r = s
             .digest(DigestConfig {
-                level: DigestLevel::Level0,
-                with_seqname_pairs: true,
+                level: DigestLevel::Level1,
+                additional_attr: vec![KnownAttr::NameLengthPairs],
             })
             .unwrap();
         match r.sq_digest {
-            DigestLevelResult::Level0(l0r) => {
-                assert_eq!(l0r.digest, "bXpsYPctlKYGMvDGwmoHTUuS7ryH5miY");
+            DigestLevelResult::Level1(l1r) => {
+                let o = l1r.digests.as_object().expect("should be an object");
+                assert_eq!(o["names"], "X1oNoYFT9Y5lYgcebv_8ghpvj3KuPWJb");
+                assert_eq!(o["lengths"], "UXp0GhaX4ZlUhtRD6buL1E4ExtU7hy7Y");
+                assert_eq!(o["sequences"], "KqbhjI-sKcMFy6cGyhxWlMt6gFx0M9rV");
+                assert_eq!(o["name_length_pairs"], "Zqh2ttvkgvwjYKW7O14-CXLXw1ztolHL");
             }
             _ => unreachable!(),
         }
