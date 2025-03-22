@@ -21,11 +21,11 @@ pub struct SeqCol {
 }
 
 impl SeqCol {
-    pub fn names(&self) -> anyhow::Result<Vec<String>> {
+    pub fn names(&self) -> anyhow::Result<&Vec<String>> {
         let mut v = None;
         for x in &self.attributes {
             if let SeqColAttribute::Names(x) = x {
-                v = Some(x.clone());
+                v = Some(x);
             };
         }
         v.ok_or(anyhow::anyhow!(
@@ -33,11 +33,11 @@ impl SeqCol {
         ))
     }
 
-    pub fn lengths(&self) -> anyhow::Result<Vec<usize>> {
+    pub fn lengths(&self) -> anyhow::Result<&Vec<usize>> {
         let mut v = None;
         for x in &self.attributes {
             if let SeqColAttribute::Lengths(x) = x {
-                v = Some(x.clone());
+                v = Some(x);
             }
         }
         v.ok_or(anyhow::anyhow!(
@@ -45,11 +45,11 @@ impl SeqCol {
         ))
     }
 
-    pub fn sequences(&self) -> anyhow::Result<Vec<String>> {
+    pub fn sequences(&self) -> anyhow::Result<&Vec<String>> {
         let mut v = None;
         for x in &self.attributes {
             if let SeqColAttribute::Sequences(x) = x {
-                v = Some(x.clone());
+                v = Some(x);
             }
         }
         v.ok_or(anyhow::anyhow!(
@@ -548,19 +548,20 @@ impl SeqCol {
                 let lens = self.lengths()?;
                 assert_eq!(names.len(), lens.len());
                 Ok(SeqColAttribute::NameLengthPairs(
-                    names.into_iter().zip(lens).collect(),
+                    names.iter().cloned().zip(lens.iter().copied()).collect(),
                 ))
             }
             KnownAttr::SortedNameLengthPairs => {
                 let names = self.names()?;
                 let lens = self.lengths()?;
                 assert_eq!(names.len(), lens.len());
-                let mut nlp: Vec<(String, usize)> = names.into_iter().zip(lens).collect();
+                let mut nlp: Vec<(String, usize)> =
+                    names.iter().cloned().zip(lens.iter().copied()).collect();
                 nlp.sort_unstable();
                 Ok(SeqColAttribute::SortedNameLengthPairs(nlp))
             }
             KnownAttr::SortedSequences => {
-                let mut sequences = self.sequences()?;
+                let mut sequences = self.sequences()?.clone();
                 sequences.sort_unstable();
                 Ok(SeqColAttribute::SortedSequences(sequences))
             }
