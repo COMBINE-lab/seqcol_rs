@@ -179,7 +179,7 @@ impl DigestToJson for Level0Digest {
 /// a level 1 seqcol digest
 #[derive(Debug)]
 pub struct Level1Digest {
-    digests: serde_json::Value,
+    pub digests: serde_json::Value,
 }
 
 impl DigestToJson for Level1Digest {
